@@ -15,7 +15,8 @@ type Ingester interface {
 	// User should call this function periodically in order to get the latest updates.
 	// return error means unexpected file content, user should close the Ingester.
 	// Notes: FetchUpdates is not thread-safe.
-	FetchUpdates(ctx context.Context) error
+	// Return value is the number of events added to the run.
+	FetchUpdates(ctx context.Context) (int, error)
 
 	Close() error
 
@@ -28,33 +29,35 @@ type ingester struct {
 	run    *Run
 }
 
-func (i *ingester) FetchUpdates(ctx context.Context) error {
+func (i *ingester) FetchUpdates(ctx context.Context) (int, error) {
+	counter := 0
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return counter, nil
 		default:
 		}
 
 		offset, err := i.file.Seek(0, io.SeekCurrent)
 		if err != nil {
-			return fmt.Errorf("seek fail: %w", err)
+			return counter, fmt.Errorf("seek fail: %w", err)
 		}
 		data, err := tfrecord.Read(i.file)
 		if err != nil {
 			_, err = i.file.Seek(offset, io.SeekStart)
 			if err != nil {
-				return fmt.Errorf("seek fail: %w", err)
+				return counter, fmt.Errorf("seek fail: %w", err)
 			}
 			// no more data
 			break
 		}
 		err = i.parser.ParseRecord(data, i.run.AddScalarEvent)
 		if err != nil {
-			return fmt.Errorf("parse fail: %w", err)
+			return counter, fmt.Errorf("parse fail: %w", err)
 		}
+		counter++
 	}
-	return nil
+	return counter, nil
 }
 
 func (i *ingester) Close() error {
