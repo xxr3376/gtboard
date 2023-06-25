@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -14,7 +15,7 @@ type Ingester interface {
 	// User should call this function periodically in order to get the latest updates.
 	// return error means unexpected file content, user should close the Ingester.
 	// Notes: FetchUpdates is not thread-safe.
-	FetchUpdates() error
+	FetchUpdates(ctx context.Context) error
 
 	Close() error
 
@@ -27,8 +28,14 @@ type ingester struct {
 	run    *Run
 }
 
-func (i *ingester) FetchUpdates() error {
+func (i *ingester) FetchUpdates(ctx context.Context) error {
 	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+
 		offset, err := i.file.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return fmt.Errorf("seek fail: %w", err)
