@@ -1,11 +1,14 @@
 package ingest
 
 import (
+	"github.com/davecgh/go-spew/spew"
 	"github.com/golang/protobuf/proto"
 	pb "github.com/xxr3376/gtboard/tensorboard_pb"
 )
 
-type ScalarEventCallback func(string, float64, int64, float32)
+type EventCallbackBase[V interface{}] func(string, float64, int64, V)
+type ScalarEventCallback = EventCallbackBase[float32]
+type TextEventCallback = EventCallbackBase[string]
 
 // Parser is an interface for parsing TFRecord files
 type parser struct {
@@ -16,19 +19,32 @@ func NewParser() *parser {
 	return &parser{}
 }
 
-func extractScalarValue(v *pb.Summary_Value) (float32, bool) {
+func extractSimpleValue(v *pb.Summary_Value) (float32, bool) {
 	simple_value, ok := v.Value.(*pb.Summary_Value_SimpleValue)
 	if ok {
 		return simple_value.SimpleValue, true
 	}
+	return 0, false
+}
 
+func extractTextValue(v *pb.Summary_Value) (string, bool) {
+	text, ok := v.Value.(*pb.Summary_Value_Tensor)
+	if !ok {
+		return "", false
+	}
+	if text.Tensor.Dtype != pb.DataType_DT_STRING {
+		return "", false
+	}
+	if len(text.Tensor.StringVal) != 1 {
+		return "", false
+	}
+	return string(text.Tensor.StringVal[0]), true
+}
+
+// It's caller's responsibility to make sure:
+// `v.Metadata.PluginData.PluginName == "scalars"`
+func extractScalarValue(v *pb.Summary_Value) (float32, bool) {
 	var value float32
-	if v.Metadata == nil || v.Metadata.PluginData == nil {
-		return 0, false
-	}
-	if v.Metadata.PluginData.PluginName != "scalars" {
-		return 0, false
-	}
 	t, ok := v.Value.(*pb.Summary_Value_Tensor)
 	if !ok {
 		return 0, false
@@ -77,7 +93,7 @@ func extractScalarValue(v *pb.Summary_Value) (float32, bool) {
 
 // ParseRecord parses a single TFRecord event
 // ParseRecord is not thread-safe due to reusing the same buffer
-func (p *parser) ParseRecord(data []byte, scalar_callback ScalarEventCallback) error {
+func (p *parser) ParseRecord(data []byte, scalar_callback ScalarEventCallback, text_callback TextEventCallback) error {
 	p.buffer.Reset()
 	err := proto.Unmarshal(data, &p.buffer)
 	if err != nil {
@@ -91,11 +107,30 @@ func (p *parser) ParseRecord(data []byte, scalar_callback ScalarEventCallback) e
 		return nil
 	}
 	for _, v := range summary.Value {
-		value, ok := extractScalarValue(v)
-		if !ok {
+		if v.Metadata == nil || v.Metadata.PluginData == nil {
+			value, ok := extractSimpleValue(v)
+			if ok {
+				scalar_callback(v.Tag, float64(p.buffer.WallTime), p.buffer.Step, value)
+			}
 			continue
 		}
-		scalar_callback(v.Tag, float64(p.buffer.WallTime), p.buffer.Step, value)
+
+		switch v.Metadata.PluginData.PluginName {
+		case "scalars":
+			value, ok := extractScalarValue(v)
+			if !ok {
+				spew.Dump(v)
+				continue
+			}
+			scalar_callback(v.Tag, float64(p.buffer.WallTime), p.buffer.Step, value)
+		case "text":
+			value, ok := extractTextValue(v)
+			if !ok {
+				spew.Dump(v)
+				continue
+			}
+			text_callback(v.Tag, float64(p.buffer.WallTime), p.buffer.Step, value)
+		}
 	}
 	return nil
 }

@@ -51,7 +51,7 @@ func (i *ingester) FetchUpdates(ctx context.Context) (int, error) {
 			// no more data
 			break
 		}
-		err = i.parser.ParseRecord(data, i.run.AddScalarEvent)
+		err = i.parser.ParseRecord(data, i.run.AddScalarEvent, i.run.AddTextEvent)
 		if err != nil {
 			return counter, fmt.Errorf("parse fail: %w", err)
 		}
